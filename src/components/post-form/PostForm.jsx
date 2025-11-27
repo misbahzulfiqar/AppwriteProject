@@ -19,68 +19,108 @@ export default function PostForm({ post }) {
     const userData = useSelector((state) => state.auth.userData);
     const [previewUrl, setPreviewUrl] = useState("");
 
-    // Fetch image preview URL if editing a post
     useEffect(() => {
-        const fetchPreview = async () => {
-            if (post?.featuredImage) {
-            const url = await appwriteService.getFileUrl(post.featuredImage);
-                setPreviewUrl(url);
-            }
-        };
-        fetchPreview();
+        if (post?.featuredImage) {
+            const urlObj = appwriteService.getFilePreview(post.featuredImage);
+            setPreviewUrl(urlObj.href);
+        }
     }, [post]);
 
     const submit = async (data) => {
-        try {
-            let file = null;
+    try {
+        let file = null;
 
-            if (data.image && data.image[0]) {
-                file = await appwriteService.uploadFile(data.image[0]);
-                // Delete old file if editing
-                if (post?.featuredImage) {
-                    await appwriteService.deleteFile(post.featuredImage);
-                }
+        if (data.image && data.image[0]) {
+            console.log(" Starting file upload...");
+            
+            file = await appwriteService.uploadFile(data.image[0]);
+            
+            if (!file) {
+                throw new Error("File upload failed - no response from server");
             }
 
-            const postData = {
-                ...data,
-                featuredImage: file ? file.$id : post?.featuredImage,
-            };
+            console.log(" File uploaded successfully, file ID:", file.$id);
 
-            let dbPost;
-            if (post) {
-                dbPost = await appwriteService.updatePost(post.$id, postData);
-            } else {
-                dbPost = await appwriteService.createPost({ ...postData, userId: userData.$id });
+            // delete old image when updating
+            if (post?.featuredImage) {
+                console.log(" Deleting old image:", post.featuredImage);
+                await appwriteService.deleteFile(post.featuredImage);
             }
-
-            if (dbPost) {
-                navigate(`/post/${dbPost.$id}`);
-            }
-        } catch (err) {
-            console.error("Error submitting post:", err);
+        } else {
+            console.log(" No new file selected");
         }
-    };
+
+        const postData = {
+            title: data.title,
+            slug: data.slug,
+            content: data.content,
+            status: data.status,
+            featuredImage: file ? file.$id : post?.featuredImage,
+        };
+
+        console.log(" Saving post data:", postData);
+
+        let dbPost;
+        if (post) {
+            dbPost = await appwriteService.updatePost(post.$id, postData);
+        } else {
+            dbPost = await appwriteService.createPost({
+                ...postData,
+                userId: userData.$id,
+            });
+        }
+
+        if (dbPost) {
+            console.log(" Post saved successfully");
+            navigate(`/post/${dbPost.$id}`);
+        } else {
+            throw new Error("Failed to save post to database");
+        }
+    } catch (err) {
+        console.error(" Error submitting post:", err);
+        alert(`Error: ${err.message}`);
+    }
+};
 
     const slugTransform = useCallback((value) => {
-        if (value && typeof value === "string")
+        if (value && typeof value === "string") {
             return value
                 .trim()
                 .toLowerCase()
-                .replace(/[^a-zA-Z\d\s]+/g, "-")
-                .replace(/\s/g, "-");
+                .replace(/[^a-zA-Z0-9\s]/g, "-")
+                .replace(/\s+/g, "-");
+        }
         return "";
     }, []);
 
-    useEffect(() => {
-        const subscription = watch((value, { name }) => {
-            if (name === "title") {
-                setValue("slug", slugTransform(value.title), { shouldValidate: true });
+ // Load preview image correctly
+useEffect(() => {
+    const loadPreview = async () => {
+        if (post?.featuredImage) {
+            try {
+                // First try getFileView for direct image access
+                const url = appwriteService.getFileView(post.featuredImage);
+                console.log(" Generated image URL:", url);
+                
+                if (url) {
+                    setPreviewUrl(url);
+                } else {
+                    // Fallback to getFilePreview
+                    const previewUrl = appwriteService.getFilePreview(post.featuredImage);
+                    console.log(" Fallback to preview URL:", previewUrl);
+                    setPreviewUrl(previewUrl);
+                }
+            } catch (error) {
+                console.error(" Error generating image URL:", error);
+                setPreviewUrl("");
             }
-        });
+        } else {
+            setPreviewUrl("");
+        }
+    };
 
-        return () => subscription.unsubscribe();
-    }, [watch, slugTransform, setValue]);
+    loadPreview();
+}, [post]);
 
     return (
         <form onSubmit={handleSubmit(submit)} className="flex flex-wrap">
@@ -91,16 +131,25 @@ export default function PostForm({ post }) {
                     className="mb-4"
                     {...register("title", { required: true })}
                 />
+
                 <Input
                     label="Slug :"
                     placeholder="Slug"
                     className="mb-4"
                     {...register("slug", { required: true })}
-                    onInput={(e) => {
-                        setValue("slug", slugTransform(e.currentTarget.value), { shouldValidate: true });
-                    }}
+                    onInput={(e) =>
+                        setValue("slug", slugTransform(e.target.value), {
+                            shouldValidate: true,
+                        })
+                    }
                 />
-                <RTE label="Content :" name="content" control={control} defaultValue={getValues("content")} />
+
+                <RTE
+                    label="Content :"
+                    name="content"
+                    control={control}
+                    defaultValue={getValues("content")}
+                />
             </div>
 
             <div className="w-1/3 px-2">
@@ -114,7 +163,11 @@ export default function PostForm({ post }) {
 
                 {previewUrl && (
                     <div className="w-full mb-4">
-                        <img src={previewUrl} alt={post?.title} className="rounded-lg" />
+                        <img
+                            src={previewUrl}
+                            alt={post?.title}
+                            className="rounded-lg w-full"
+                        />
                     </div>
                 )}
 
@@ -125,7 +178,11 @@ export default function PostForm({ post }) {
                     {...register("status", { required: true })}
                 />
 
-                <Button type="submit" bgColor={post ? "bg-green-500" : undefined} className="w-full">
+                <Button
+                    type="submit"
+                    bgColor={post ? "bg-green-500" : undefined}
+                    className="w-full"
+                >
                     {post ? "Update" : "Submit"}
                 </Button>
             </div>
